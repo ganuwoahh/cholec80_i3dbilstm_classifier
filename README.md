@@ -101,5 +101,14 @@ To ensure the pipeline was mathematically sound and to prove the model wasn't ha
 <img width="643" height="382" alt="success4" src="https://github.com/user-attachments/assets/e619ad16-34fa-4323-8285-1bd75d8e9467" />
 <img width="1778" height="607" alt="success_gradcam" src="https://github.com/user-attachments/assets/6ecc83ec-d4c3-4b44-925f-225b401f2efc" />
 
-## 7. 
+## 7. Future Improvements
+
+* Obviously the big one is not using the tool annotations. It would solve the problem of the current BiLSTM not predicting clipping and cutting at all.
+* Using a Transformer over a BiLSTM
+* Train the I3D and Classification Head together (lol)
+* Optical Flow would benefit from 3FPS footage instead
+* Don't use JPEGs
+* Use Focal Loss
+
+
 **This readme is mostly AI** 
