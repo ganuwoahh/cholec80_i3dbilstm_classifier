@@ -1,52 +1,100 @@
 # Surgical Phase Recognition on Cholec80: A Two-Stage I3D & BiLSTM Pipeline
 
-## 📌 Project Overview
-This project tackles the complex challenge of Automated Surgical Phase Recognition using the **Cholec80 dataset** (laparoscopic cholecystectomy videos). The objective is to accurately classify every second of surgical video into one of seven distinct operative phases. 
+## 1. The Cholec80 Dataset
+Cholec80 is a dataset consisting of 80 laparoscopic cholecystectomy surgeries of varying lengths. The original videos have a resolution of 854 x 480 at 25 FPS. Every single frame in the dataset is annotated as one of 7 distinct surgical phases:
+1. Preparation
+2. Calot Triangle Dissection
+3. Clipping and Cutting
+4. Gallbladder Dissection
+5. Gallbladder Packaging
+6. Cleaning and Coagulation
+7. Gallbladder Retrieval
 
-Processing high-resolution, 3D spatiotemporal video data requires immense compute. A naive approach of training an end-to-end 3D Convolutional Neural Network alongside a temporal sequence model requires RAM and VRAM that far exceeds standard research hardware. 
+*(Note: I didn't realise that retrieval and retraction weren't the same. So if you see retraction anywhere it's supposed to be retrieval)*
 
-To solve this, this project implements a highly optimized **Two-Stage Feature Extraction and Temporal Reasoning Pipeline**. By completely separating the "Visual Cortex" (I3D) from the "Hippocampus" (BiLSTM), this architecture bypasses hardware bottlenecks, eliminates memory leaks, and significantly improves phase classification—specifically curing the "temporal amnesia" common in standalone 3D CNNs.
+*(insert visual examples of phases here)*
 
----
+To make this computationally feasible, the videos were downsampled to 1 FPS. 
 
-## 🧠 The Architecture
+**Data Structure:**
+The dataset contains 3 main folders: `frames`, `phase_annotations`, and `tool_annotations` (tool annotations were not used in this project). Because the original framerate was 25 FPS, for every frame in the `frames` folder, there are 25 corresponding phase annotations in the text files. 
 
-### Stage 1: The Visual Cortex (I3D Feature Extractor)
-The first stage processes raw surgical video to understand *what* is happening on screen (tools, tissue interactions) without worrying about *when* it is happening.
-* **Model:** Inception 3D (I3D), utilizing dual streams (RGB and Optical Flow).
-* **Input:** 32-frame video clips.
-* **Optimization:** Used `tf.keras.mixed_precision` (float16) to safely double batch sizes on 16GB T4 GPUs.
-* **Data Pipeline:** Converted raw video frames into highly compressed `.tfrecord` binaries to eliminate I/O bottlenecking.
-
-### Stage 2: The Hippocampus (BiLSTM Temporal Memory)
-Standalone 3D CNNs suffer from severe "Groundhog Day" syndrome. For example, Phase 1 (Calot Triangle Dissection) and Phase 3 (Gallbladder Dissection) use identical tools and look visually identical in a 1.2-second vacuum.
-* **The Hand-off:** The classification head of the trained I3D model was decapitated. The entire 80-video dataset was passed through the headless I3D to extract dense **1024-dimensional feature vectors**, compressing gigabytes of video into lightweight `.npy` files.
-* **The Model:** A Bidirectional Long Short-Term Memory (BiLSTM) network.
-* **The Result:** The BiLSTM reads the entire surgery forward and backward. When it sees visual features representing "burning fat," it checks its memory to see if the "clipping" phase has already occurred, allowing it to correctly deduce Phase 3 over Phase 1. 
-
----
-
-## 🛠️ Key Engineering Hurdles & Solutions
-
-Building this pipeline required heavily modifying standard TensorFlow/Keras protocols to survive tight RAM constraints (30GB Kaggle limits) and multi-GPU distribution bugs.
-
-### 1. The "Round-Robin" Interleave (Beating the RAM Limit)
-Standard dataset shuffling on massive 3D videos requires a massive `buffer_size`, which easily exceeds 60GB of system RAM, crashing the kernel. 
-**Solution:** Re-engineered the `tf.data` pipeline to use `.interleave()`. Instead of sequential reading + massive shuffling, the pipeline simultaneously opens 8 different surgical videos and deals clips in a round-robin format. This achieved perfect batch diversity while dropping the required shuffle buffer by 95%.
-
-### 2. The Multi-GPU Partial Batch Crash
-When using `tf.distribute.MirroredStrategy` across dual GPUs, the final uneven batch of an epoch would cause a partial batch allocation (e.g., GPU 0 gets 3 clips, GPU 1 gets 0 clips), causing a mathematical collapse during 3D Average Pooling.
-**Solution:** Explicitly enforced `drop_remainder=True` during the dataset windowing and batching phase to protect the spatial math of the I3D layers.
-
-### 3. Circumventing Keras Metric Bugs in Imbalanced Data
-The Cholec80 dataset is highly imbalanced (Phases 0 and 1 dominate the runtime). Relying on Keras's default `accuracy` and `Recall` metrics provided a deeply flawed view of the model's performance. 
-* Keras evaluates Recall using a strict `0.5` threshold, which automatically flags correct predictions in a 7-class softmax output as False Negatives if the confidence is below 50%.
-* During BiLSTM training, Keras included the `-1` ignored padding sequences in its accuracy calculations, artificially tanking the displayed accuracy.
-**Solution:** Bypassed Keras entirely for evaluation. Wrote custom inference scripts to run predictions, strip away temporal padding via masking, and utilized `scikit-learn` to calculate the mathematical ground-truth Precision, Recall, F1-scores, and generate normalized Confusion Matrices and Multi-Class ROC Curves.
+**Sources:**
+* Downloaded originally from the Endonet Paper: [cholec80.tar.gz](https://s3.unistra.fr/camma_public/datasets/cholec80/cholec80.tar.gz)
+* Publicly available on Kaggle: [Cholec80 Dataset](https://www.kaggle.com/datasets/ganumatta/cholec80)
+* *FYI: Do not use the `prepare.py` file found in the original Endonet repo. It's heavily bugged.*
 
 ---
 
-## 📈 Results & Visualizations
-*By splitting the architecture and allowing the BiLSTM to map the grammatical rules of the surgery, the model successfully differentiated visually identical phases, resulting in clean ROC curves and a highly diagonal confusion matrix.*
+## 2. The Model: I3D & Optical Flow
+For the base computer vision model, I cloned a Keras I3D implementation from [dlpbc/keras-kinetics-i3d](https://github.com/dlpbc/keras-kinetics-i3d) and decapitated the original classification layer: [I3D No Top Layer](https://www.kaggle.com/datasets/ganumatta/i3d-no-top-3).
 
-*(Note: Add your final Accuracy, Macro AUC, ROC curves, Confusion Matrix, and Grad-CAM++ visualization image links here).*
+I3D utilizes a Two-Stream architecture: an **RGB stream** (standard video) and an **Optical Flow stream** (a mathematical calculation of individual pixel movement from frame to frame).
+
+*(insert visual examples of RGB vs. Optical Flow here)*
+
+### Generating the Optical Flow
+* **Dataset Link:** [Cholec80 Optical Flow](https://www.kaggle.com/datasets/ganumatta/cholec80-optical-flow)
+* **Methodology:** A pre-trained RAFT (Recurrent All-Pairs Field Transforms) model with "small" weights was used to calculate the flow. Because the video is downsampled to 1 FPS, the frame-to-frame movements are massive and choppy. Older algorithms fail here. RAFT uses a GRU that maps each pixel from one frame to another as a 4D correlation matrix and calculates the difference between those pairs. It loops 12 times, and I took the 12th/final prediction as the output for that frame pair. For a video that is *n* frames long, you generate *n-1* optical flow images. To format the Optical Flow so the I3D could read it like RGB, the raw motion vectors were clamped with a bound of `-15` to `15`, shifted to `0` to `30` and then normalized to an integer scale of `0` to `255`.
+* *Note: Because OpenCV saves images in BGR format instead of RGB, the resulting optical flow colors are visually inverted.*
+
+---
+
+## 3. Hardware Issues
+With both the RGB and Optical Flow datastreams ready, fine-tuning the I3D should have been straightforward. Instead, it became a massive hardware battle against the Kaggle VM limits.
+
+**Bottleneck:** Optical Flow was initially saved as a collection of `.jpeg` files to stay under Kaggle's input limits. However, unpacking these JPEGs dynamically during training heavily throttled the CPU, creating a massive bottleneck.
+
+**RAM issue:** To actually learn anything, the 3D dataset needed to be shuffled. Attempting to load this shuffled data into Kaggle's 30GB of RAM instantly crashed the kernel.
+
+**Solution:**
+To survive the hardware limits, every video was repackaged into a `.tfrecord`. This format acts as a single, highly compressed bytestream. For each frame in a video, the TFRecord tightly packages:
+1. The RGB frame
+2. The corresponding Optical Flow frame *(left empty for the very first frame)*
+3. The Phase Annotation
+
+This is saved as one continuous file per video which is very easy to parse during training as long as you provide TensorFlow with the correct mapping blueprint.
+
+---
+
+## 4. Training the I3D 
+Using a Kaggle notebook with the pre-trained I3D and the new TFRecord dataset, the pipeline was built as follows:
+1. A function to parse the `.tfrecord` byte-strings back into tensors.
+2. A sliding window function to stack the parsed frames on top of each other to create overlapping 3D video clips.
+3. A builder function to compile the training and validation datasets.
+
+It required some serious duct-tape engineering (including a round-robin interleave to bypass the shuffle buffer memory explosion) to keep the system stable, but a custom classification layer was slapped on top, and the model was successfully fine-tuned.
+
+<img width="1521" height="982" alt="success2" src="https://github.com/user-attachments/assets/0156e45d-6e2c-4504-9838-4d1a69e49290" />
+<img width="1241" height="967" alt="success1" src="https://github.com/user-attachments/assets/21d43e3c-4d5b-4bd3-a2cc-8ff263c711bc" />
+<img width="677" height="392" alt="success3" src="https://github.com/user-attachments/assets/2b2cb494-84b1-4d7b-8044-b698aa8004f9" />
+
+---
+
+## 5. BiLSTM Classification Layer
+You can see that the model doesn't understand the difference between stage 1 and stage 3. This is because the stages are visually similar. The only real difference is that one stage happens before clipping and cutting and the other happens after. But since the model wasn't trained on long enough sequences due to the hardware issues, it doesn't know that so it predicts them all as gallbladder dissection since it's the most common class.
+
+The solution is a BiLSTM layer to replace the softmax classification layer. This ideally would have been trained together with the I3D but because of hardware limitations (again), I trained them separately.
+
+**The Feature Extraction:**:
+1. The fully trained I3D model was run over the entire dataset again in a pure forward pass.
+3. The top classification layers were chopped off, exposing the network's internal 1024-Dimensional feature vector.
+4. These feature vectors were stacked chronologically for an entire video, resulting in a tiny 2D matrix representing the whole surgery. These matrices were saved to disk alongside their label vectors.
+
+A 2-layer Bidirectional LSTM (BiLSTM) was then trained exclusively on these `.npy` feature matrices. 
+
+---
+
+## 📊 6. Evaluation Metrics
+To ensure the pipeline was mathematically sound and to prove the model wasn't hallucinating its predictions, the final evaluation relied heavily on:
+* **AUC (Area Under the ROC Curve):** To accurately measure performance and bypass Keras softmax thresholding bugs in highly imbalanced classes.
+* **Correlation Matrices**
+* **Grad-CAM++:** To visually map the spatial activations and prove the network was looking at the physical tools and tissue interactions, rather than just memorizing static background noise.
+
+<img width="1541" height="995" alt="success6" src="https://github.com/user-attachments/assets/99ea10cb-1a69-41ca-928d-d5555c4881bb" />
+<img width="1263" height="997" alt="success5" src="https://github.com/user-attachments/assets/0627ee61-a49f-4928-88f4-7f9f3b9b29e2" />
+<img width="643" height="382" alt="success4" src="https://github.com/user-attachments/assets/e619ad16-34fa-4323-8285-1bd75d8e9467" />
+<img width="1778" height="607" alt="success_gradcam" src="https://github.com/user-attachments/assets/6ecc83ec-d4c3-4b44-925f-225b401f2efc" />
+
+
+**This readme is mostly AI** 
