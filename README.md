@@ -12,7 +12,7 @@ Cholec80 is a dataset consisting of 80 laparoscopic cholecystectomy surgeries of
 
 *(Note: I didn't realise that retrieval and retraction weren't the same. So if you see retraction anywhere it's supposed to be retrieval)*
 
-*(insert visual examples of phases here)*
+<img width="1879" height="352" alt="image" src="https://github.com/user-attachments/assets/e134312b-6908-4d98-87dd-e411ee798e51" />
 
 To make this computationally feasible, the videos were downsampled to 1 FPS. 
 
@@ -31,12 +31,17 @@ For the base computer vision model, I cloned a Keras I3D implementation from [dl
 
 I3D utilizes a Two-Stream architecture: an **RGB stream** (standard video) and an **Optical Flow stream** (a mathematical calculation of individual pixel movement from frame to frame).
 
-*(insert visual examples of RGB vs. Optical Flow here)*
+This is frame 1017 from video1: <img width="854" height="480" alt="video01_001017" src="https://github.com/user-attachments/assets/13ae9f17-9268-41dd-a64b-2c01861fc3fd" />
+
+This is frame 1018 from video2: <img width="854" height="480" alt="video01_001018" src="https://github.com/user-attachments/assets/e55b17c8-a3ac-4007-bc21-cf591a24d5cb" />
+
+This is frame 1018's optical flow in video1: <img width="854" height="480" alt="video01_001018" src="https://github.com/user-attachments/assets/d6929d96-98f0-46f3-a92a-440ad6bd2b2e" />
 
 ### Generating the Optical Flow
 * **Dataset Link:** [Cholec80 Optical Flow](https://www.kaggle.com/datasets/ganumatta/cholec80-optical-flow)
 * **Methodology:** A pre-trained RAFT (Recurrent All-Pairs Field Transforms) model with "small" weights was used to calculate the flow. Because the video is downsampled to 1 FPS, the frame-to-frame movements are massive and choppy. Older algorithms fail here. RAFT uses a GRU that maps each pixel from one frame to another as a 4D correlation matrix and calculates the difference between those pairs. It loops 12 times, and I took the 12th/final prediction as the output for that frame pair. For a video that is *n* frames long, you generate *n-1* optical flow images. To format the Optical Flow so the I3D could read it like RGB, the raw motion vectors were clamped with a bound of `-15` to `15`, shifted to `0` to `30` and then normalized to an integer scale of `0` to `255`.
 * *Note: Because OpenCV saves images in BGR format instead of RGB, the resulting optical flow colors are visually inverted.*
+* *_Note: The quality of the uploaded dataset is only at 85%. Please use atleast 95 if you can__
 
 ---
 
@@ -85,7 +90,7 @@ A 2-layer Bidirectional LSTM (BiLSTM) was then trained exclusively on these `.np
 
 ---
 
-## 📊 6. Evaluation Metrics
+## 6. Evaluation Metrics
 To ensure the pipeline was mathematically sound and to prove the model wasn't hallucinating its predictions, the final evaluation relied heavily on:
 * **AUC (Area Under the ROC Curve):** To accurately measure performance and bypass Keras softmax thresholding bugs in highly imbalanced classes.
 * **Correlation Matrices**
@@ -96,5 +101,5 @@ To ensure the pipeline was mathematically sound and to prove the model wasn't ha
 <img width="643" height="382" alt="success4" src="https://github.com/user-attachments/assets/e619ad16-34fa-4323-8285-1bd75d8e9467" />
 <img width="1778" height="607" alt="success_gradcam" src="https://github.com/user-attachments/assets/6ecc83ec-d4c3-4b44-925f-225b401f2efc" />
 
-
+## 7. 
 **This readme is mostly AI** 
